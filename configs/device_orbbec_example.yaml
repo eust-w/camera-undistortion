@@ -1,0 +1,41 @@
+# Canonical device calibration (camera-geometry/v1)
+#
+# IR_L values are from the factory calibration quoted in the tech spec.
+# IR_R intrinsics below are PLACEHOLDERS: replace them with the values your
+# device actually reports (the spec only quotes IR_L + baseline).
+schema_version: camera-geometry/v1
+device:
+  vendor: orbbec
+  serial_number: CH5LB5400J5
+cameras:
+  - id: IR_L
+    resolution: { width: 1600, height: 1300 }
+    model:
+      type: kannala_brandt_4
+      convention: orbbec_kb_v1
+    intrinsics: { fx: 504.97497043, fy: 504.85320543, cx: 825.88761829, cy: 644.70496968 }
+    distortion: { k1: 0.07305208, k2: -0.01165996, k3: 0.00033907, k4: 0.00027176 }
+    extrinsics:
+      reference_camera: IR_L
+      rotation: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+      translation_m: [0, 0, 0]
+  - id: IR_R
+    resolution: { width: 1600, height: 1300 }
+    model:
+      type: kannala_brandt_4
+      convention: orbbec_kb_v1
+    # PLACEHOLDER intrinsics -- overwrite with device-reported values
+    intrinsics: { fx: 505.10234512, fy: 504.98765432, cx: 826.10451234, cy: 645.22109876 }
+    distortion: { k1: 0.07311234, k2: -0.01160221, k3: 0.00035123, k4: 0.00028456 }
+    extrinsics:
+      reference_camera: IR_L
+      rotation: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+      translation_m: [0.12086, 0, 0]
+shutter:
+  type: unknown
+  readout_time_ns: null
+calibration:
+  source: factory
+  version: v1
+quality:
+  status: unvalidated
