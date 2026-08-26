@@ -155,7 +155,7 @@ def test_service_metrics_and_errors(client, config):
     assert "camera_geometry_info" in r.text
 
     bad = client.post("/camera/resolve", json={"config_path": "/nonexistent.yaml", "camera_id": "IR_L"})
-    assert bad.status_code == 400
+    assert bad.status_code == 404  # input path validation happens before config parse
 
     missing = client.get("/camera/UNKNOWN:ID")
     assert missing.status_code == 404

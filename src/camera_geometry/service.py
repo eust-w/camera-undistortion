@@ -11,10 +11,12 @@ Auth/TLS/rate-limiting belong to the platform gateway, not this module.
 from __future__ import annotations
 
 import os
+import shutil
+import uuid
 from pathlib import Path
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from .calibration.parser import load_device_calibration
@@ -82,9 +84,21 @@ class ReprocessRequest(BaseModel):
     enable_fallback: bool = True
 
 
+def _safe_existing(path: str, kind: str = "path") -> Path:
+    """Inputs must exist and be absolute (no traversal games)."""
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        raise HTTPException(status_code=400, detail=f"{kind} path must be absolute: {path}")
+    resolved = p.resolve()
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail=f"{kind} not found: {path}")
+    return resolved
+
+
 def _load(path: str):
+    p = _safe_existing(path, "config")
     try:
-        return load_device_calibration(path)
+        return load_device_calibration(p)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"invalid calibration config: {exc}") from exc
 
@@ -159,6 +173,7 @@ def camera_get(calibration_id: str):
 
 @app.post("/camera/ray-map")
 def camera_ray_map(req: RayMapRequest):
+    _safe_existing(req.config_path, "config")
     calib = _load(req.config_path)
     entry = calib.camera(req.camera_id)
     cam = build_camera(entry)
@@ -183,6 +198,7 @@ def camera_ray_map(req: RayMapRequest):
 
 @app.post("/camera/virtual-camera")
 def camera_virtual(req: VirtualCameraRequest):
+    _safe_existing(req.config_path, "config")
     calib = _load(req.config_path)
     entry = calib.camera(req.camera_id)
     cam = build_camera(entry)
@@ -218,10 +234,12 @@ def camera_stereo_rectify(req: StereoRectifyRequest):
     cam_l, cam_r = build_camera(el), build_camera(er)
     rig = build_stereo_rectifier(cam_l, cam_r, SE3.from_Rt(ext.rotation, ext.translation_m),
                                  req.width, req.height, req.fov_x_deg)
-    img_l, img_r = cv2.imread(req.left_image), cv2.imread(req.right_image)
+    img_l_p = _safe_existing(req.left_image, "left_image")
+    img_r_p = _safe_existing(req.right_image, "right_image")
+    img_l, img_r = cv2.imread(str(img_l_p)), cv2.imread(str(img_r_p))
     if img_l is None or img_r is None:
-        raise HTTPException(status_code=400, detail="cannot read input images")
-    out = Path(req.out_dir)
+        raise HTTPException(status_code=400, detail="cannot decode input images")
+    out = Path(req.out_dir).expanduser().resolve()
     out.mkdir(parents=True, exist_ok=True)
     from .runtime.opencv_backend import remap_image as _remap
 
@@ -246,16 +264,68 @@ def camera_stereo_rectify(req: StereoRectifyRequest):
     return result
 
 
+_JOBS: dict[str, dict] = {}
+
+
+def _run_reprocess_job(job_id: str, req: ReprocessRequest):
+    try:
+        pipe = AutoGeometryPipeline(config_path=req.config_path, home=_home())
+        report = pipe.process_episode(
+            input_dir=req.input_dir, output_dir=req.output_dir, preset=req.preset,
+            max_frames=req.max_frames, enable_fallback=req.enable_fallback,
+        )
+        payload = report.to_json()
+        payload["artifact_uri"] = req.output_dir
+        _JOBS[job_id].update({"status": "DONE", "result": payload})
+    except Exception as exc:
+        _JOBS[job_id].update({"status": "ERROR", "error": str(exc)})
+
+
 @app.post("/camera/reprocess")
-def camera_reprocess(req: ReprocessRequest):
-    pipe = AutoGeometryPipeline(config_path=req.config_path, home=_home())
-    report = pipe.process_episode(
-        input_dir=req.input_dir, output_dir=req.output_dir, preset=req.preset,
-        max_frames=req.max_frames, enable_fallback=req.enable_fallback,
-    )
-    payload = report.to_json()
-    payload["artifact_uri"] = req.output_dir
-    return payload
+def camera_reprocess(req: ReprocessRequest, background_tasks: BackgroundTasks):
+    _safe_existing(req.input_dir, "input_dir")
+    _safe_existing(req.config_path, "config")
+    job_id = uuid.uuid4().hex[:12]
+    _JOBS[job_id] = {"status": "RUNNING", "submitted_at": str(Path(req.input_dir))}
+    background_tasks.add_task(_run_reprocess_job, job_id, req)
+    return {"job_id": job_id, "status": "RUNNING", "poll": f"/jobs/{job_id}"}
+
+
+@app.get("/jobs/{job_id}")
+def job_status(job_id: str):
+    if job_id not in _JOBS:
+        raise HTTPException(status_code=404, detail="unknown job")
+    return {"job_id": job_id, **_JOBS[job_id]}
+
+
+@app.post("/camera/stereo-rectify-upload")
+async def camera_stereo_rectify_upload(
+    config: UploadFile,
+    left_image: UploadFile,
+    right_image: UploadFile,
+    out_dir: str,
+    width: int = 1024,
+    height: int = 1024,
+    fov_x_deg: float = 100.0,
+    depth: bool = False,
+):
+    """Multipart variant: images/config uploaded directly (no shared filesystem)."""
+    work = Path(_home()) / "uploads" / uuid.uuid4().hex[:8]
+    work.mkdir(parents=True, exist_ok=True)
+    try:
+        cfg_path = work / "config.yaml"
+        cfg_path.write_bytes(await config.read())
+        lp, rp = work / "left.png", work / "right.png"
+        lp.write_bytes(await left_image.read())
+        rp.write_bytes(await right_image.read())
+        req = StereoRectifyRequest(
+            config_path=str(cfg_path), left_image=str(lp), right_image=str(rp),
+            out_dir=str(Path(out_dir).expanduser().resolve()), width=width,
+            height=height, fov_x_deg=fov_x_deg, depth=depth,
+        )
+        return camera_stereo_rectify(req)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 @app.get("/metrics")
