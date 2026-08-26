@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 
 import numpy as np
-from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from .calibration.parser import load_device_calibration
@@ -227,7 +227,10 @@ def camera_stereo_rectify(req: StereoRectifyRequest):
     import cv2
 
     calib = _load(req.config_path)
-    el, er = calib.camera("IR_L"), calib.camera("IR_R")
+    cam_ids = [c.id for c in calib.cameras]
+    ref_id = ext0.reference_camera if (ext0 := next((c.extrinsics for c in calib.cameras if c.extrinsics), None)) else cam_ids[0]
+    other_id = next((c for c in cam_ids if c != ref_id), cam_ids[0])
+    el, er = calib.camera(ref_id), calib.camera(other_id)
     ext = er.extrinsics or el.extrinsics
     if ext is None:
         raise HTTPException(status_code=400, detail="no extrinsics in config")
@@ -247,7 +250,7 @@ def camera_stereo_rectify(req: StereoRectifyRequest):
     cv2.imwrite(str(out / "rectified_left.png"), rl)
     cv2.imwrite(str(out / "rectified_right.png"), rr)
     result = {
-        "calibration_id": f"{calib.calibration_id('IR_L')};{calib.calibration_id('IR_R')}",
+        "calibration_id": f"{calib.calibration_id(ref_id)};{calib.calibration_id(other_id)}",
         "camera_model": el.model.type,
         "quality_status": calib.quality.status,
         "artifact_uri": str(out),
@@ -340,9 +343,7 @@ def prometheus_metrics():
         metrics["latest_calibration_id"] = latest.calibration_id
         metrics["latest_health_score"] = latest.health_score if latest.health_score is not None else -1
         metrics["latest_quality_status"] = latest.quality_status
-    return __import__("fastapi").Response(
-        content=to_prometheus(metrics), media_type="text/plain; version=0.0.4"
-    )
+    return Response(content=to_prometheus(metrics), media_type="text/plain; version=0.0.4")
 
 
 @app.get("/healthz")

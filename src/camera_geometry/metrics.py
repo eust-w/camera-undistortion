@@ -3,25 +3,7 @@ format, and a tiny in-process registry fed by the pipeline."""
 
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass, field
 from typing import Any
-
-CANONICAL_METRICS = [
-    "camera_model",
-    "calibration_source",
-    "calibration_id",
-    "projection_roundtrip_p95_px",
-    "projection_roundtrip_p99_px",
-    "valid_pixel_ratio",
-    "stereo_epipolar_median_px",
-    "stereo_epipolar_p95_px",
-    "virtual_camera_coverage",
-    "feature_retention",
-    "calibration_health_score",
-    "runtime_ms",
-    "gpu_memory_mb",
-]
 
 
 def sanitize_name(name: str) -> str:
@@ -54,21 +36,3 @@ def to_prometheus(metrics: dict[str, Any], job: str = "camera_geometry") -> str:
         walk(sanitize_name(k), v)
     return "\n".join(lines) + "\n"
 
-
-@dataclass
-class StageTimer:
-    """Context manager recording per-stage wall time into a dict (ms)."""
-
-    sink: dict
-    stage: str
-    _t0: float = field(default=0.0, repr=False)
-
-    def __enter__(self):
-        self._t0 = time.perf_counter()
-        return self
-
-    def __exit__(self, *exc):
-        self.sink.setdefault("runtime_ms", {})[f"{self.stage}_ms"] = int(
-            (time.perf_counter() - self._t0) * 1000
-        )
-        return False

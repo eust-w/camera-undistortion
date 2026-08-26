@@ -252,8 +252,9 @@ class AutoGeometryPipeline:
         write_depth: bool = False,
         enable_fallback: bool | None = None,
     ) -> EpisodeReport:
-        if enable_fallback is not None:
-            self.enable_fallback = enable_fallback
+        # per-call override only: never mutate instance state (a pipeline
+        # reused across episodes must keep its configured fallback policy)
+        effective_fallback = self.enable_fallback if enable_fallback is None else enable_fallback
         input_dir, output_dir = Path(input_dir), Path(output_dir)
         timings: dict[str, int] = {}
         metrics = build_metrics_section()
@@ -294,7 +295,7 @@ class AutoGeometryPipeline:
         fallback_history: list[dict] = []
         if failing:
             adopted = None
-            if self.enable_fallback:
+            if effective_fallback:
                 t = _timed()
                 adopted = self._attempt_fallback(pairs, "static_qa", fallback_history)
                 timings["fallback_attempt_ms"] = t()
@@ -391,7 +392,7 @@ class AutoGeometryPipeline:
         geometry_bad = (
             not np.isfinite(epipolar_median) or epipolar_median > self.geometry_fail_median_px
         )
-        if geometry_bad and self.enable_fallback:
+        if geometry_bad and effective_fallback:
             t = _timed()
             adopted = self._attempt_fallback(pairs, "geometry_qa", fallback_history)
             timings["fallback_attempt_ms"] = t()
@@ -415,7 +416,7 @@ class AutoGeometryPipeline:
         static_checks = [c for qa in static_qa.values() for c in qa.report.checks]
         health = aggregate_health(static_checks + [stereo_check, iq_check])
         overall_status = health.status
-        if overall_status == "FAIL" and not self.enable_fallback and fallback_history:
+        if overall_status == "FAIL" and not effective_fallback and fallback_history:
             # fallback chain exhausted, still below gate -> QUARANTINE (spec 42);
             # derived outputs are still written for later diagnosis/reprocessing
             pass

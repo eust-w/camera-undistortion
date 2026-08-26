@@ -133,6 +133,17 @@ def test_quarantine_on_broken_calibration(episode, tmp_path):
     assert q["failure_stage"] == "static_qa"
 
 
+def test_enable_fallback_override_does_not_mutate_instance(episode, tmp_path):
+    """Regression: a per-call enable_fallback=False must not permanently
+    disable fallback for subsequent default calls on the same pipeline."""
+    pipe = AutoGeometryPipeline(config_path=episode["config"], home=tmp_path / "home_ef",
+                                roundtrip_samples=2000)
+    assert pipe.enable_fallback is True
+    pipe.process_episode(input_dir=episode["episode"], output_dir=tmp_path / "out_ef",
+                         qa_pairs=1, enable_fallback=False)
+    assert pipe.enable_fallback is True  # instance policy unchanged
+
+
 def test_multi_camera_episode(tmp_path):
     """3-camera rig: reference + two others -> per-camera views + rectified pair."""
     cam_l, cam_r, T_lr = make_stereo_rig(width=1600, height=1300, seed=51)

@@ -107,8 +107,8 @@ def cmd_virtual(args) -> int:
 
 def cmd_rectify(args) -> int:
     calib = _load(args.config)
-    el = calib.camera("IR_L")
-    er = calib.camera("IR_R")
+    el = calib.camera(args.camera_l)
+    er = calib.camera(args.camera_r)
     cam_l, cam_r = build_camera(el), build_camera(er)
     T = None
     for e in (el, er):
@@ -211,6 +211,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("rectify", help="rectify a stereo fisheye pair")
     s.add_argument("--config", required=True)
+    s.add_argument("--camera-l", default="IR_L")
+    s.add_argument("--camera-r", default="IR_R")
     s.add_argument("--left", required=True)
     s.add_argument("--right", required=True)
     s.add_argument("--out", required=True)
