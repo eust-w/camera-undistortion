@@ -14,17 +14,34 @@ dependencies = [
     "pydantic>=2.6",
     "PyYAML>=6.0",
     "opencv-python>=4.9",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
 torch = ["torch>=2.2"]
-dev = ["pytest>=8", "ruff"]
+server = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
+dev = ["pytest>=8", "ruff", "hypothesis", "mypy", "pyarrow"]
 
 [project.scripts]
 camera-geometry = "camera_geometry.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/camera_geometry"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_redundant_casts = true
+no_implicit_optional = true
+# gradual typing: untyped function bodies allowed in MVP, annotations enforced
+# on public model/geometry layers over time
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["camera_geometry.service", "camera_geometry.cli", "camera_geometry.pipeline"]
+check_untyped_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
