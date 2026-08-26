@@ -190,6 +190,20 @@ Phase 4+: dataset DAG hardening, Prometheus metrics export.
   self-calibration back onto the identifiable vertical channel (skips
   silently when the binary is absent)
 
+## Downstream adapter examples (spec sections 24/25/27)
+
+Runnable, self-checking examples under `examples/`:
+
+```bash
+python examples/slam_adapter.py     # raw feature pixels -> bearings -> triangulation
+python examples/render_for_3dgs.py  # gaussians -> RAW fisheye pixels + ray map
+python examples/handpose_3d.py      # virtual-view detections -> 3D keypoints
+```
+
+`scripts/benchmark.py` tracks the performance envelope (also gated in tests):
+unproject ~8 M pts/s, ray map 1600x1300 in ~0.7 s, remap ~390 fps,
+full 12-frame stereo episode cold/warm ~12 s/~9 s.
+
 ## Service API, metrics, rolling shutter, golden tests
 
 ```bash
