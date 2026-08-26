@@ -50,6 +50,7 @@ def main() -> int:
     ap.add_argument("--preset", default=None, help="ego_90 / ego_100 / ego_110")
     ap.add_argument("--size", type=int, default=1024, help="output square size")
     ap.add_argument("--fov", type=float, default=100.0, help="used when --preset not given")
+    ap.add_argument("--backend", choices=["auto", "cv2", "torch"], default="auto")
     args = ap.parse_args()
 
     src = Path(args.input).expanduser()
@@ -79,22 +80,57 @@ def main() -> int:
     if not writer.isOpened():
         raise SystemExit("cannot open VideoWriter")
 
+    backend = args.backend
+    torch_ctx = None
+    if backend in ("auto", "torch"):
+        try:
+            import torch
+
+            from camera_geometry.runtime.torch_backend import make_sampling_grid, remap_batch
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            if backend == "torch" or device == "cuda":
+                sampling = make_sampling_grid(grid, W, H, device=torch.device(device))
+                torch_ctx = (torch, sampling, device)
+                print(f"[backend] torch grid_sample on {device}")
+        except ImportError:
+            if backend == "torch":
+                raise SystemExit("torch not installed")
+    if torch_ctx is None:
+        print("[backend] cv2.remap (CPU)")
+
     sample_raw = sample_out = None
     n = 0
     t0 = time.time()
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        undist = cv2.remap(frame, mapx, mapy, interpolation=cv2.INTER_LINEAR,
-                           borderMode=cv2.BORDER_CONSTANT)
-        writer.write(undist)
-        if n == max(0, total // 2):
-            sample_raw, sample_out = frame.copy(), undist.copy()
-        n += 1
-        if n % 100 == 0:
-            rate = n / (time.time() - t0)
-            print(f"  {n}/{total} frames ({rate:.1f} fps)")
+    if torch_ctx is not None:
+        torch, sampling, device = torch_ctx
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            tensor = torch.from_numpy(frame.transpose(2, 0, 1)[None].astype(np.float32) / 255.0)
+            tensor = tensor.to(device)
+            out_t = remap_batch(tensor, sampling)
+            undist = (out_t[0].clamp(0, 1).cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
+            writer.write(undist)
+            if n == max(0, total // 2):
+                sample_raw, sample_out = frame.copy(), undist.copy()
+            n += 1
+            if n % 100 == 0:
+                print(f"  {n}/{total} frames ({n/(time.time()-t0):.1f} fps)")
+    else:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            undist = cv2.remap(frame, mapx, mapy, interpolation=cv2.INTER_LINEAR,
+                               borderMode=cv2.BORDER_CONSTANT)
+            writer.write(undist)
+            if n == max(0, total // 2):
+                sample_raw, sample_out = frame.copy(), undist.copy()
+            n += 1
+            if n % 100 == 0:
+                print(f"  {n}/{total} frames ({n/(time.time()-t0):.1f} fps)")
     cap.release()
     writer.release()
     elapsed = time.time() - t0

@@ -19,9 +19,10 @@ _NEWTON_TOL = 1e-12
 _NEWTON_ITERS = 50
 
 
-def solve_theta(theta_d: np.ndarray, k: np.ndarray) -> np.ndarray:
+def solve_theta(theta_d: np.ndarray, k: np.ndarray, theta_init: np.ndarray | None = None,
+                max_iters: int = _NEWTON_ITERS) -> np.ndarray:
     """Vectorized Newton solve of theta_d = theta + k1 t^3 + k2 t^5 + k3 t^7 + k4 t^9."""
-    theta = theta_d.copy()
+    theta = (theta_d if theta_init is None else theta_init).copy()
     for _ in range(_NEWTON_ITERS):
         th2 = theta * theta
         f = theta * (1.0 + th2 * (k[0] + th2 * (k[1] + th2 * (k[2] + th2 * k[3])))) - theta_d
@@ -37,6 +38,8 @@ def solve_theta(theta_d: np.ndarray, k: np.ndarray) -> np.ndarray:
 class KannalaBrandt4(CameraModel):
     model_type = "kannala_brandt_4"
 
+    _LUT_SIZE = 2048
+
     def __init__(self, fx, fy, cx, cy, k1, k2, k3, k4, width: int, height: int):
         super().__init__(width, height)
         if min(fx, fy) <= 0:
@@ -46,6 +49,20 @@ class KannalaBrandt4(CameraModel):
         self.cx = float(cx)
         self.cy = float(cy)
         self.k = np.array([k1, k2, k3, k4], dtype=np.float64)
+        self._theta_lut: np.ndarray | None = None  # theta as f(theta_d), uniform grid
+
+    def _theta_init(self, theta_d: np.ndarray) -> np.ndarray:
+        """Coarse LUT init for Newton (theta_d grid -> theta, linear interp)."""
+        if self._theta_lut is None:
+            grid = np.linspace(0.0, _MAX_THETA, self._LUT_SIZE)
+            th2 = grid * grid
+            theta_d_of = grid * (1.0 + th2 * (self.k[0] + th2 * (self.k[1] + th2 * (self.k[2] + th2 * self.k[3]))))
+            self._theta_lut = theta_d_of
+        td = np.clip(theta_d, 0.0, float(self._theta_lut[-1]))
+        pos = td / max(float(self._theta_lut[-1]) / (self._LUT_SIZE - 1), 1e-12)
+        i0 = np.clip(np.floor(pos).astype(int), 0, self._LUT_SIZE - 2)
+        frac = np.clip(pos - i0, 0.0, 1.0)
+        return self._theta_lut[i0] * (1.0 - frac) + self._theta_lut[i0 + 1] * frac
 
     # ---- projection -------------------------------------------------
     def _project(self, xyz: np.ndarray) -> np.ndarray:
@@ -65,7 +82,7 @@ class KannalaBrandt4(CameraModel):
         xd = (uv[..., 0] - self.cx) / self.fx
         yd = (uv[..., 1] - self.cy) / self.fy
         td = np.hypot(xd, yd)
-        theta = solve_theta(td, self.k)
+        theta = solve_theta(td, self.k, theta_init=self._theta_init(td), max_iters=8)
         safe_td = np.where(td > _EPS_R, td, 1.0)
         s = np.tan(theta) / safe_td
         rays = np.stack([xd * s, yd * s, np.ones_like(td)], axis=-1)

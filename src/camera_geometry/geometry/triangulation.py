@@ -29,23 +29,32 @@ def triangulate_midpoint(
     c_r = T_left_right.t.copy()  # right center in left frame: P_L = R P_R + t
     d_r_in_l = rays_right @ T_left_right.R.T  # directions right->left frame
 
-    points = np.empty((len(rays_left), 3))
-    residuals = np.full(len(rays_left), np.inf)
+    # Vectorized closed-form midpoint triangulation:
+    # solve min |s*d1 - t*d2 - b|^2 via 2x2 normal equations per point.
+    b = c_r - c_l
+    d11 = np.sum(d_r_in_l * d_r_in_l, axis=-1)
+    d22 = np.sum(rays_left * rays_left, axis=-1)
+    d12 = -np.sum(rays_left * d_r_in_l, axis=-1)
+    rhs1 = np.sum(d_r_in_l * b, axis=-1)   # -d2 . b
+    rhs2 = np.sum(rays_left * b, axis=-1)  #  d1 . b
+    det = d22 * d11 - d12 * d12
+    safe_det = np.where(np.abs(det) > 1e-12, det, np.nan)
+    s = (rhs2 * d11 + rhs1 * d12) / safe_det
+    t = -(rhs1 * d22 + rhs2 * d12) / safe_det
 
-    for i, (d1, d2) in enumerate(zip(rays_left, d_r_in_l)):
-        A = np.stack([d1, -d2], axis=-1)
-        b = c_r - c_l
-        try:
-            st, *_ = np.linalg.lstsq(A, b, rcond=None)
-        except np.linalg.LinAlgError:
-            continue
-        p1 = st[0] * d1
-        p2 = c_r + st[1] * d2
-        mid = (p1 + p2) / 2.0
-        points[i] = mid
-        cosang = np.clip(d1 @ d2, -1.0, 1.0)
-        ang = np.degrees(np.arccos(cosang))
-        if ang < min_angle_deg:
-            continue
-        residuals[i] = float(np.linalg.norm(p1 - p2) / max(1e-9, np.linalg.norm(mid)))
+    p1 = rays_left * s[:, None]
+    p2 = c_r + d_r_in_l * t[:, None]
+    mid = (p1 + p2) / 2.0
+
+    cosang = np.clip(np.sum(rays_left * d_r_in_l, axis=-1), -1.0, 1.0)
+    ang = np.degrees(np.arccos(cosang))
+    depths = np.linalg.norm(mid, axis=-1)
+    line_err = np.linalg.norm(p1 - p2, axis=-1)
+
+    points = mid
+    residuals = np.where(
+        (ang >= min_angle_deg) & np.isfinite(depths) & (depths > 1e-9),
+        line_err / np.maximum(depths, 1e-9),
+        np.inf,
+    )
     return points, residuals
