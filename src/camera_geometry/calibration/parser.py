@@ -16,7 +16,7 @@ from ..schema import DeviceCalibration
 def _normalize_units(node):
     """Recursively convert legacy 'translation_mm' keys to canonical meters."""
     if isinstance(node, dict):
-        out = {}
+        out: dict = {}
         for k, v in node.items():
             if k == "translation_mm" and "translation_m" not in node:
                 out["translation_m"] = [float(x) / 1000.0 for x in v]
@@ -64,6 +64,9 @@ def load_device_calibration(path: str | Path) -> DeviceCalibration:
         "eucm": "eucm",
         "double_sphere": "double_sphere",
         "ds": "double_sphere",
+        "brown": "brown_conrady",
+        "plumb_bob": "brown_conrady",
+        "brown_conrady": "brown_conrady",
     }
     for cam in data.get("cameras", []):
         model = cam.get("model")

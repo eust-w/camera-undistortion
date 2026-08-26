@@ -8,22 +8,25 @@ no scipy/Ceres dependency.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
 from ..models.base import CameraModel
+from ..models.brown import BrownConrady
 from ..models.double_sphere import DoubleSphere
 from ..models.eucm import EUCM
 from ..models.kb4 import KannalaBrandt4
 from ..models.pinhole import PinholeCamera
 
-MODEL_TYPES = ("kannala_brandt_4", "eucm", "double_sphere", "pinhole")
+MODEL_TYPES = ("kannala_brandt_4", "eucm", "double_sphere", "pinhole", "brown_conrady")
 
 PARAM_NAMES: dict[str, list[str]] = {
     "kannala_brandt_4": ["fx", "fy", "cx", "cy", "k1", "k2", "k3", "k4"],
     "eucm": ["fx", "fy", "cx", "cy", "alpha"],
     "double_sphere": ["fx", "fy", "cx", "cy", "xi", "alpha"],
     "pinhole": ["fx", "fy", "cx", "cy"],
+    "brown_conrady": ["fx", "fy", "cx", "cy", "k1", "k2", "k3", "p1", "p2"],
 }
 
 PARAM_SCALES: dict[str, np.ndarray] = {
@@ -31,9 +34,11 @@ PARAM_SCALES: dict[str, np.ndarray] = {
     "eucm": np.array([50, 50, 50, 50, 0.1]),
     "double_sphere": np.array([50, 50, 50, 50, 0.1, 0.1]),
     "pinhole": np.array([50, 50, 50, 50]),
+    "brown_conrady": np.array([50, 50, 50, 50, 0.05, 0.01, 0.005, 0.01, 0.01]),
 }
 
-MODEL_CLASSES: dict[str, type[CameraModel]] = {
+MODEL_CLASSES: dict[str, Any] = {
+    "brown_conrady": BrownConrady,
     "kannala_brandt_4": KannalaBrandt4,
     "eucm": EUCM,
     "double_sphere": DoubleSphere,
@@ -51,6 +56,9 @@ def make_camera(model_type: str, theta: np.ndarray, width: int, height: int) -> 
         return cls(p["fx"], p["fy"], p["cx"], p["cy"], p["alpha"], width, height)
     if model_type == "double_sphere":
         return cls(p["fx"], p["fy"], p["cx"], p["cy"], p["xi"], p["alpha"], width, height)
+    if model_type == "brown_conrady":
+        return cls(p["fx"], p["fy"], p["cx"], p["cy"], p["k1"], p["k2"], p["k3"],
+                   p["p1"], p["p2"], width, height)
     return cls(p["fx"], p["fy"], p["cx"], p["cy"], width, height)
 
 
@@ -61,7 +69,8 @@ def initial_theta(model_type: str, width: int, height: int, prior: CameraModel |
         return np.array([d.get(n, extra.get(n, 0.0)) for n in PARAM_NAMES[model_type]], dtype=np.float64)
     f0 = 0.6 * width
     base = {"fx": f0, "fy": f0, "cx": (width - 1) / 2, "cy": (height - 1) / 2}
-    defaults = {"alpha": 0.5, "xi": 0.5, "k1": 0.0, "k2": 0.0, "k3": 0.0, "k4": 0.0}
+    defaults = {"alpha": 0.5, "xi": 0.5, "k1": 0.0, "k2": 0.0, "k3": 0.0,
+                "k4": 0.0, "p1": 0.0, "p2": 0.0}
     return np.array([base.get(n, defaults.get(n, 0.0)) for n in PARAM_NAMES[model_type]], dtype=np.float64)
 
 

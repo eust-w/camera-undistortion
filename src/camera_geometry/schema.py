@@ -40,7 +40,7 @@ class KB4Distortion(BaseModel):
 
 
 class ModelSpec(BaseModel):
-    type: Literal["kannala_brandt_4", "pinhole", "eucm", "double_sphere"]
+    type: Literal["kannala_brandt_4", "pinhole", "eucm", "double_sphere", "brown_conrady"]
     convention: str = "opencv_fisheye_kb4"
     params: dict[str, float] = Field(default_factory=dict)
 

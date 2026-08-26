@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..schema import CameraEntry
 from .base import CameraModel
+from .brown import BrownConrady
 from .double_sphere import DoubleSphere
 from .eucm import EUCM
 from .kb4 import KannalaBrandt4
@@ -17,7 +18,7 @@ def build_camera(entry: CameraEntry) -> CameraModel:
     if entry.model.type == "pinhole":
         return PinholeCamera(intr.fx, intr.fy, intr.cx, intr.cy, w, h)
     if entry.model.type == "kannala_brandt_4":
-        d = entry.distortion or (0.0, 0.0, 0.0, 0.0)
+        d = entry.distortion
         return KannalaBrandt4(
             intr.fx, intr.fy, intr.cx, intr.cy,
             getattr(d, "k1", 0.0), getattr(d, "k2", 0.0),
@@ -29,4 +30,12 @@ def build_camera(entry: CameraEntry) -> CameraModel:
     if entry.model.type == "double_sphere":
         return DoubleSphere(intr.fx, intr.fy, intr.cx, intr.cy,
                             float(params.get("xi", 0.5)), float(params.get("alpha", 0.5)), w, h)
+    if entry.model.type == "brown_conrady":
+        d = entry.distortion
+        return BrownConrady(intr.fx, intr.fy, intr.cx, intr.cy,
+                            getattr(d, "k1", params.get("k1", 0.0)),
+                            getattr(d, "k2", params.get("k2", 0.0)),
+                            getattr(d, "k3", params.get("k3", 0.0)),
+                            getattr(d, "p1", params.get("p1", 0.0)),
+                            getattr(d, "p2", params.get("p2", 0.0)), w, h)
     raise ValueError(f"unsupported camera model type: {entry.model.type}")

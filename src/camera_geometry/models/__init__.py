@@ -1,4 +1,5 @@
 from .base import CameraModel, to_numpy
+from .brown import BrownConrady
 from .double_sphere import DoubleSphere
 from .eucm import EUCM
 from .factory import build_camera
@@ -7,6 +8,7 @@ from .pinhole import PinholeCamera
 
 __all__ = [
     "CameraModel",
+    "BrownConrady",
     "DoubleSphere",
     "EUCM",
     "KannalaBrandt4",
