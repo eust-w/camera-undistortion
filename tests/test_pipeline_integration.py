@@ -22,7 +22,11 @@ from camera_geometry.schema import (
     Resolution,
 )
 from camera_geometry.stereo.depth import stereo_depth
-from camera_geometry.testing.synthetic import make_stereo_rig, render_textured_room
+from camera_geometry.testing.synthetic import (
+    make_stereo_rig,
+    render_textured_room,
+    render_textured_room_ss,
+)
 from camera_geometry.transforms import SE3
 
 
@@ -105,7 +109,7 @@ def test_full_pipeline_passes_acceptance(episode, tmp_path):
     assert refs["IR_L"].startswith("ITEST000001:IR_L")
     vdir = out_root / "derived" / "virtual_ego_100" / "IR_L"
     assert vdir.exists() and len(list(vdir.glob("*.png"))) == 8
-    assert len(list((out_root / "derived" / "stereo_rectified" / "left").glob("*.png"))) == 8
+    assert len(list((out_root / "derived" / "stereo_rectified_IR_L-IR_R" / "left").glob("*.png"))) == 8
 
     # second run must hit LUT cache and stay PASS
     report2 = pipe.process_episode(input_dir=episode["episode"], output_dir=out_root, qa_pairs=2)
@@ -127,6 +131,66 @@ def test_quarantine_on_broken_calibration(episode, tmp_path):
     q = report.quarantine
     assert q["reason"] == "camera_geometry_unstable"
     assert q["failure_stage"] == "static_qa"
+
+
+def test_multi_camera_episode(tmp_path):
+    """3-camera rig: reference + two others -> per-camera views + rectified pair."""
+    cam_l, cam_r, T_lr = make_stereo_rig(width=1600, height=1300, seed=51)
+    from camera_geometry.testing.synthetic import make_kb4_camera
+
+    cam_l2 = make_kb4_camera(52, 1600, 1300)
+    T_l_l2 = SE3.from_Rt(np.eye(3), np.array([-0.06, 0.0, 0.01]))  # IR_L2 center in IR_L frame
+    T_l2_l = T_l_l2.inverse()
+
+    ep = tmp_path / "ep3"
+    (ep / "raw" / "IR_L").mkdir(parents=True)
+    (ep / "raw" / "IR_R").mkdir(parents=True)
+    (ep / "raw" / "IR_L2").mkdir(parents=True)
+    cache_l, cache_r, cache_l2 = {}, {}, {}
+    idn = np.eye(3)
+    for i in range(3):
+        s = np.array([0.02 * i, 0.01 * i, 0.02 * i])
+        cv2.imwrite(str(ep / "raw" / "IR_L" / f"f{i}.png"),
+                    render_textured_room_ss(cam_l, SE3.from_Rt(idn, -s), ray_cache=cache_l))
+        cv2.imwrite(str(ep / "raw" / "IR_R" / f"f{i}.png"),
+                    render_textured_room(cam_r, T_lr.inverse().compose(SE3.from_Rt(idn, -s)), ray_cache=cache_r))
+        cv2.imwrite(str(ep / "raw" / "IR_L2" / f"f{i}.png"),
+                    render_textured_room(cam_l2, T_l2_l.compose(SE3.from_Rt(idn, -s)), ray_cache=cache_l2))
+
+    def entry(cid, cam, ext):
+        return CameraEntry(
+            id=cid, resolution=Resolution(width=1600, height=1300),
+            model=ModelSpec(type="kannala_brandt_4"),
+            intrinsics=Intrinsics(fx=cam.fx, fy=cam.fy, cx=cam.cx, cy=cam.cy),
+            distortion=KB4Distortion(k1=cam.k[0], k2=cam.k[1], k3=cam.k[2], k4=cam.k[3]),
+            extrinsics=ext,
+        )
+
+    calib = DeviceCalibration(
+        device=DeviceInfo(vendor="synthetic", serial_number="MULTICAM001"),
+        cameras=[
+            entry("IR_L", cam_l, None),
+            entry("IR_R", cam_r, Extrinsics(reference_camera="IR_L",
+                                            rotation=T_lr.R.tolist(),
+                                            translation_m=T_lr.t.tolist())),
+            entry("IR_L2", cam_l2, Extrinsics(reference_camera="IR_L",
+                                              rotation=T_l_l2.R.tolist(),
+                                              translation_m=T_l_l2.t.tolist())),
+        ],
+        calibration=CalibrationMeta(source="factory", version="v1"),
+        quality=QualityInfo(status="unvalidated"),
+    )
+    cfg = tmp_path / "device3.yaml"
+    dump_device_calibration(calib, cfg)
+
+    pipe = AutoGeometryPipeline(config_path=cfg, home=tmp_path / "home", roundtrip_samples=10_000,
+                                baseline_range=(0.04, 0.16), max_fallback_frames=3)
+    report = pipe.process_episode(input_dir=ep, output_dir=ep, qa_pairs=2, write_depth=False)
+    assert report.status in ("PASS", "DEGRADED"), json.dumps(report.to_json())[:1500]
+    virt = ep / "derived" / "virtual_ego_100"
+    for cid in ("IR_L", "IR_R", "IR_L2"):
+        assert (virt / cid).exists(), f"missing virtual view for {cid}"
+    assert (ep / "derived" / "stereo_rectified_IR_L-IR_R" / "left").exists()
 
 
 def test_depth_smoke(episode):

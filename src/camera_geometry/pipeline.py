@@ -25,6 +25,7 @@ from .calibration.resolver import (
     FallbackRequired,
     ResolvedCalibration,
 )
+
 from .calibration.store import CalibrationStore
 from .calibration.validator import CalibrationQA, validate_calibration
 from .geometry.ray_map import generate_ray_map
@@ -77,9 +78,11 @@ def _list_images(directory: Path) -> list[Path]:
     return sorted(p for p in directory.iterdir() if p.suffix.lower() in IMAGE_EXTS)
 
 
-def find_stereo_pairs(input_dir: Path) -> list[tuple[Path, Path]]:
-    left_dir = input_dir / "raw" / "IR_L"
-    right_dir = input_dir / "raw" / "IR_R"
+def find_stereo_pairs(input_dir: Path, reference_camera: str = "IR_L",
+                      other_camera: str = "IR_R") -> list[tuple[Path, Path]]:
+    """Frame pairs (reference, other) matched by basename."""
+    left_dir = input_dir / "raw" / reference_camera
+    right_dir = input_dir / "raw" / other_camera
     right_by_name = {p.name: p for p in _list_images(right_dir)}
     pairs = []
     for lp in _list_images(left_dir):
@@ -103,11 +106,10 @@ class AutoGeometryPipeline:
     ):
         if (config_path is None) == (device_calibration is None):
             raise ValueError("provide exactly one of config_path / device_calibration")
-        self.device_calibration = (
-            device_calibration
-            if device_calibration is not None
-            else load_device_calibration(config_path)
-        )
+        if device_calibration is not None:
+            self.device_calibration = device_calibration
+        else:
+            self.device_calibration = load_device_calibration(config_path)  # type: ignore[arg-type]
         self.home = Path(
             home
             or __import__("os").environ.get("CAMERA_GEOMETRY_HOME")
@@ -200,10 +202,10 @@ class AutoGeometryPipeline:
     ) -> tuple[StereoRectifier, str]:
         cam_l = build_camera(resolved_left.calibration.camera(resolved_left.camera_id))
         cam_r = build_camera(resolved_right.calibration.camera(resolved_right.camera_id))
-        T = SE3.from_Rt(
-            resolved_right.calibration.camera(resolved_right.camera_id).extrinsics.rotation,
-            resolved_right.calibration.camera(resolved_right.camera_id).extrinsics.translation_m,
-        )
+        ext_rr = resolved_right.calibration.camera(resolved_right.camera_id).extrinsics
+        if ext_rr is None:  # pragma: no cover - guarded by callers
+            raise ValueError("stereo rectification requires extrinsics on the right camera")
+        T = SE3.from_Rt(ext_rr.rotation, ext_rr.translation_m)
         key = make_key(
             {
                 "kind": "stereo_rectify",
@@ -257,7 +259,10 @@ class AutoGeometryPipeline:
         metrics = build_metrics_section()
 
         t = _timed()
-        pairs = find_stereo_pairs(input_dir)
+        cam_ids = [c.id for c in self.device_calibration.cameras]
+        ref_id = self._reference_camera()
+        other_id = next((c for c in cam_ids if c != ref_id), cam_ids[0])
+        pairs = find_stereo_pairs(input_dir, ref_id, other_id)
         timings["ingest_ms"] = t()
         if not pairs:
             return self._quarantine(output_dir, "no_stereo_pairs_found", "ingest", {})
@@ -329,8 +334,7 @@ class AutoGeometryPipeline:
                 "virtual_valid": vvalid,
                 "keys": {"raymap": rkey, "virtual": vkey},
             }
-        cam_order = [c.id for c in self.device_calibration.cameras]
-        left_id, right_id = cam_order[0], cam_order[-1]
+        left_id, right_id = ref_id, other_id
         rig, skey = self.stereo_grids(resolved[left_id], resolved[right_id], *rectified_size, rectified_fov_deg)
         timings["lut_generation_ms"] = t()
 
@@ -495,14 +499,26 @@ class AutoGeometryPipeline:
             json.dumps({"schema_version": "camera-geometry/v1", "code_version": CODE_VERSION}, indent=2)
         )
         (qa_dir / "report.json").write_text(json.dumps(health.to_json(), indent=2))
-        with (meta_dir / "timestamps.csv").open("w") as f:
-            f.write("index,left_file,right_file\n")
-            for i, (lp, rp) in enumerate(pairs):
-                f.write(f"{i},{lp.name},{rp.name}\n")
+        rows = [(i, lp.name, rp.name) for i, (lp, rp) in enumerate(pairs)]
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+
+            table = pa.table({
+                "index": [r[0] for r in rows],
+                "left_file": [r[1] for r in rows],
+                "right_file": [r[2] for r in rows],
+            })
+            pq.write_table(table, meta_dir / "timestamps.parquet")
+        except ImportError:
+            with (meta_dir / "timestamps.csv").open("w") as f:
+                f.write("index,left_file,right_file\n")
+                for i, lp_name, rp_name in rows:
+                    f.write(f"{i},{lp_name},{rp_name}\n")
 
         selected = pairs if max_frames is None else pairs[:max_frames]
         virt_root = output_dir / "derived" / f"virtual_{preset}"
-        rect_root = output_dir / "derived" / "stereo_rectified"
+        rect_root = output_dir / "derived" / f"stereo_rectified_{left_id}-{right_id}"
         for cid in (left_id, right_id):
             (virt_root / cid).mkdir(parents=True, exist_ok=True)
         for sub in ("left", "right"):
@@ -515,8 +531,16 @@ class AutoGeometryPipeline:
             if img_l is None or img_r is None:
                 continue
             if write_virtual:
-                _imwrite(virt_root / left_id / f"{stem}.png", remap_image(img_l, artifacts[left_id]["virtual_grid"]))
-                _imwrite(virt_root / right_id / f"{stem}.png", remap_image(img_r, artifacts[right_id]["virtual_grid"]))
+                for cid, img in ((left_id, img_l), (right_id, img_r)):
+                    _imwrite(virt_root / cid / f"{stem}.png", remap_image(img, artifacts[cid]["virtual_grid"]))
+                raw_root = lp.parent.parent
+                for cid in resolved:
+                    if cid in (left_id, right_id):
+                        continue
+                    extra = _imread(raw_root / cid / f"{stem}{lp.suffix}")
+                    if extra is not None:
+                        _imwrite(virt_root / cid / f"{stem}.png",
+                                 remap_image(extra, artifacts[cid]["virtual_grid"]))
             if write_rectified:
                 rl = remap_image(img_l, rig.grid_left)
                 rr = remap_image(img_r, rig.grid_right)
@@ -597,7 +621,9 @@ class AutoGeometryPipeline:
         stage1: dict = {}
         ext = er.extrinsics or el.extrinsics
         if ext is not None:
-            T = SE3.from_Rt(ext.rotation, ext.translation_m)
+            rot = np.asarray(ext.rotation, dtype=np.float64)
+            tra = np.asarray(ext.translation_m, dtype=np.float64)
+            T = SE3.from_Rt(rot, tra)
             prior_l, prior_r = _build(el), _build(er)
             cur_l, cur_r = el, er
             rnd = 0
@@ -620,12 +646,46 @@ class AutoGeometryPipeline:
                 cur_l, cur_r = new_l, new_r
                 prior_l, prior_r = _build(cur_l), _build(cur_r)
             if rnd == 0:
-                cand = None
+                cand = None  # type: ignore[assignment]
         history.append({"stage": "stereo_refinement", "trigger": stage, "stats": stage1})
         if stage1:
             qa = _validate_candidate(cand)
             if all(q.status != "FAIL" for q in qa.values()):
                 return cand
+
+        # ---- stage 1.5: external COLMAP SfM (optional, binary on PATH) ----
+        # COLMAP self-calibrates each camera independently on the episode's
+        # frames; per-camera vertical-channel params are mapped back with the
+        # same identifiable-subset rule. Skipped silently when no binary.
+        if ext is not None:
+            try:
+                from .fallback.colmap_external import colmap_available, refine_with_colmap_cli
+
+                if colmap_available():
+                    raw_root = sample[0][0].parent.parent
+                    cand_ext = self.device_calibration.model_copy(deep=True)
+                    cand_ext.calibration.source = "colmap_external"
+                    cand_ext.calibration.version = f"{self.device_calibration.calibration.version}-c1"
+                    stage15: dict = {}
+                    for entry in cand_ext.cameras:
+                        try:
+                            refined = refine_with_colmap_cli(
+                                images_dir=raw_root / entry.id,
+                                workdir=self.home / "colmap" / f"{entry.id}_{stage}",
+                                entry=entry,
+                            )
+                            idx = cand_ext.cameras.index(entry)
+                            cand_ext.cameras[idx] = refined
+                            stage15[entry.id] = "refined"
+                        except Exception as exc:
+                            stage15[entry.id] = {"error": str(exc)}
+                    history.append({"stage": "colmap_external", "trigger": stage, "cameras": stage15})
+                    if stage15 and all(not isinstance(v, dict) for v in stage15.values()):
+                        qa_ext = _validate_candidate(cand_ext)
+                        if all(q.status != "FAIL" for q in qa_ext.values()):
+                            return cand_ext
+            except FallbackRequired:
+                pass
 
         # ---- stage 2: AnyCalib (model may change) ------------------------
         cand2 = self.device_calibration.model_copy(deep=True)
