@@ -91,7 +91,7 @@ _SUBPIX = True  # subpixel corner refinement on matched keypoints
 def _match_stereo(img_l, img_r, min_matches: int = 100):
     gray_l = cv2.cvtColor(img_l, cv2.COLOR_BGR2GRAY)
     gray_r = cv2.cvtColor(img_r, cv2.COLOR_BGR2GRAY)
-    sift = cv2.SIFT_create(nfeatures=6000)
+    sift = cv2.SIFT_create(nfeatures=6000)  # type: ignore[attr-defined]
     kp_l, des_l = sift.detectAndCompute(gray_l, None)
     kp_r, des_r = sift.detectAndCompute(gray_r, None)
     if des_l is None or des_r is None:
@@ -228,7 +228,7 @@ def refine_stereo_pair(
         return lambda_reg * float(np.sum(((theta_full - theta0) / scales) ** 2))
 
     best_theta = theta0.copy()
-    best_cost = float(np.sum(_err(theta0) ** 2)) + _reg_cost(theta0)
+    best_cost: float = float(np.sum(_err(theta0) ** 2)) + _reg_cost(theta0)
 
     def _golden(coord: int, lo: float, hi: float, theta_full: np.ndarray, iters: int = 40) -> float:
         gr = (np.sqrt(5.0) - 1.0) / 2.0
@@ -291,7 +291,7 @@ def refine_stereo_pair(
             theta_full = theta0.copy()
             theta_full[free_idx] = theta_pol
             cost_pol = float(np.sum(_err(theta_full) ** 2)) + _reg_cost(theta_full)
-            if cost_pol < cost_side:
+            if cost_side is not None and cost_pol < cost_side:
                 theta_side = theta_full
                 cost_side = cost_pol
         except Exception:

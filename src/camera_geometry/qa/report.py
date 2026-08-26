@@ -10,6 +10,7 @@ PASS: >= 0.90, DEGRADED: >= 0.75, FAIL: < 0.75
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from .checks import CheckResult
 
@@ -78,7 +79,7 @@ def aggregate_health(checks: list[CheckResult]) -> HealthReport:
             used_weight_sum += weight
             score += weight * s
         else:
-            categories[cat] = {"score": None, "weight": weight, "note": "not_evaluated"}
+            categories[cat] = {"score": None, "weight": weight, "note": "not_evaluated"}  # type: ignore[dict-item]
 
     final = score / used_weight_sum if used_weight_sum > 0 else 0.0
     if final >= PASS_THRESHOLD:
@@ -100,9 +101,9 @@ def np_min(values):
     return float(np.min(values))
 
 
-def build_metrics_section(extra: dict | None = None) -> dict:
+def build_metrics_section(extra: dict | None = None) -> dict[str, Any]:
     """Canonical metrics block (section 43 of the spec)."""
-    metrics = {
+    metrics: dict[str, Any] = {
         "camera_model": None,
         "calibration_source": None,
         "calibration_id": None,

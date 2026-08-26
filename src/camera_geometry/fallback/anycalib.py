@@ -99,14 +99,17 @@ def anycalib_fit(
     candidates: Sequence[str] = DEFAULT_CANDIDATES,
 ) -> AnyCalibResult:
     """Accept either precomputed (pixels, rays) observations or a provider + images."""
-    if callable(provider_or_observations) and images is not None:
+    if callable(provider_or_observations):
+        if images is None:
+            raise ValueError("provider requires images")
         observations = []
         for img in images:
             out = provider_or_observations(img)
             if out is not None:
                 observations.append(out)
-        return fit_from_observations(observations, width, height, candidates)
-    return fit_from_observations(list(provider_or_observations), width, height, candidates)
+    else:
+        observations = list(provider_or_observations)
+    return fit_from_observations(observations, width, height, candidates)
 
 
 def build_camera_entry(result: AnyCalibResult, camera_id: str, width: int, height: int) -> CameraEntry:
@@ -125,7 +128,8 @@ def build_camera_entry(result: AnyCalibResult, camera_id: str, width: int, heigh
     return CameraEntry(
         id=camera_id,
         resolution=Resolution(width=width, height=height),
-        model=ModelSpec(type=model_type, convention="anycalib_v1", params=extra),
+        model=ModelSpec(type=model_type,  # type: ignore[arg-type]
+                        convention="anycalib_v1", params=extra),
         intrinsics=Intrinsics(**intr),
         distortion=distortion,
     )

@@ -33,7 +33,7 @@ def compute_disparity_sgbm(
 ) -> np.ndarray:
     gray_l = cv2.cvtColor(img_left_rect, cv2.COLOR_BGR2GRAY)
     gray_r = cv2.cvtColor(img_right_rect, cv2.COLOR_BGR2GRAY)
-    sgbm = cv2.StereoSGBM_create(
+    sgbm = cv2.StereoSGBM_create(  # type: ignore[attr-defined]
         minDisparity=0,
         numDisparities=num_disparities,
         blockSize=block_size,

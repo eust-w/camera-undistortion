@@ -170,6 +170,26 @@ PASS ≥ 0.90 · DEGRADED ≥ 0.75 · else FAIL → automatic FALLBACK → QUARA
 ## Roadmap (post-MVP)
 
 Phase 4+: dataset DAG hardening, Prometheus metrics export.
+## Engineering
+
+* **CI** (`.github/workflows/ci.yml`): ruff + mypy (0 errors, 48 files) + pytest on py3.11/3.12
+* **Docker**: `docker build -t camera-geometry . && docker run -p 8300:8300 camera-geometry`
+* **Property tests**: hypothesis-driven invariants (SE3/KB4/pinhole/EUCM round-trips)
+* **Storage backends**: LUT cache on local FS or any S3-compatible bucket
+  (`CAMERA_GEOMETRY_LUT_BACKEND=s3 CAMERA_GEOMETRY_S3_BUCKET=...`)
+* **Timestamps**: parquet (pyarrow) with CSV fallback
+* **Performance**: KB4 unprojection uses a theta-LUT Newton warm start
+  (~0.3 s for 2 M pixels, machine-precision round-trip preserved);
+  triangulation is fully vectorized; video undistortion supports a
+  torch/grid_sample backend (`--backend auto`, CUDA when available)
+* **Brown-Conrady**: normal-lens model (plumb_bob) registered across
+  factory/parser/fitting/selection
+* **Multi-camera**: N-camera rigs — per-camera virtual views + rectified
+  reference pair; baseline QA ranges are per-device configurable
+* **COLMAP hook**: `colmap_external.py` runs SfM and maps SIMPLE_RADIAL
+  self-calibration back onto the identifiable vertical channel (skips
+  silently when the binary is absent)
+
 ## Service API, metrics, rolling shutter, golden tests
 
 ```bash

@@ -65,8 +65,11 @@ def check_baseline(R, t, expected_range: tuple[float, float]) -> CheckResult:
     lo, hi = expected_range
     passed = lo < baseline < hi
     span = hi - lo
-    mid = (lo + hi) / 2
-    score = max(0.0, 1.0 - abs(baseline - mid) / (span / 2))
+    if passed:
+        score = 1.0  # inside spec range: no health penalty
+    else:
+        overshoot = (lo - baseline) if baseline <= lo else (baseline - hi)
+        score = max(0.0, 1.0 - overshoot / (span / 2))
     return CheckResult(
         "baseline",
         passed,
@@ -123,7 +126,7 @@ def check_image_quality(img: np.ndarray, min_keypoints: int = 50) -> CheckResult
     mean_lum = float(gray.mean())
     black_frame = mean_lum < 5.0
     overexposed = mean_lum > 250.0
-    sift = cv2.SIFT_create()
+    sift = cv2.SIFT_create()  # type: ignore[attr-defined]
     n_kp = len(sift.detect(gray, None))
     blur_ok = blur_var > 100.0
     exposure_ok = not black_frame and not overexposed
@@ -150,7 +153,7 @@ def epipolar_vertical_stats(img_left_rect: np.ndarray, img_right_rect: np.ndarra
     """
     gray_l = cv2.cvtColor(img_left_rect, cv2.COLOR_BGR2GRAY)
     gray_r = cv2.cvtColor(img_right_rect, cv2.COLOR_BGR2GRAY)
-    sift = cv2.SIFT_create(nfeatures=6000)
+    sift = cv2.SIFT_create(nfeatures=6000)  # type: ignore[attr-defined]
     kp_l, des_l = sift.detectAndCompute(gray_l, None)
     kp_r, des_r = sift.detectAndCompute(gray_r, None)
     empty = {

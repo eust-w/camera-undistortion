@@ -147,7 +147,9 @@ def cmd_rectify(args) -> int:
 
 
 def cmd_process_dataset(args) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    from .logging_utils import setup_logging
+
+    setup_logging(logging.INFO)
     pipeline = AutoGeometryPipeline(config_path=args.config, home=args.home)
     report = pipeline.process_episode(
         input_dir=args.input,
