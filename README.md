@@ -60,6 +60,29 @@ Raw fisheye (never modified)
       └─→ Rectified stereo   horizontal epipolar, Z = f·B/d → depth
 ```
 
+## Capability boundaries
+
+Read this before integrating. The rules below are mathematical limits or
+verified experiment results, not missing features.
+
+| | Capability | Boundary |
+|---|---|---|
+| ✅ | Dual-fisheye stereo, factory-calibrated (KB4 / DS) | full pipeline: QA → rays → virtual views → rectified stereo → depth |
+| ✅ | Mono video/image undistortion | requires that camera's factory calibration (a video file alone carries none) |
+| ✅ | Virtual pinhole views | up to **110°** — rectilinear projection beyond ~120° is mathematically impossible (infinite edge stretch) |
+| ✅ | Auto QA + fallback chain | vertical-channel intrinsics (fy / cy / k1) recoverable from fixed-E stereo parity |
+| ⚠️ | Refinement of `fx` / `cx` | **not observable** through horizontal-baseline parity — stays anchored at factory values (needs plumb-line / multi-view additions) |
+| ⚠️ | Common-mode bias on both cameras | indistinguishable from a single-camera error by stereo parity alone — resolved by convention (reference camera frozen), residual possible |
+| ❌ | Mono self-calibration without any calibration | theoretically impossible in our experiments (free depths + free E absorb everything); a `DenseRayProvider` (e.g. AnyCalib network) is required |
+| ❌ | Fisheye → rectilinear at fisheye's native FOV (>150°) | projection-impossible; use stereographic if you must keep full FOV (not yet in scope) |
+| ⚠️ | Fallback precision floor | on synthetic low-texture data parity converges to ~1.5 px, not the 0.5 px PASS gate → QUARANTINE by design; richer real texture expected to do better |
+| ⚠️ | Rolling shutter | model + row-aware API ready, but needs IMU/readout-time metadata from your VIO stack |
+| ❌ | Feature frontend / SLAM backend / GS renderer themselves | this project provides the geometry layer only; examples show the adapter contracts |
+
+Performance envelope (reference machine, M-series Mac): unproject ~8 M pts/s,
+ray map 1600×1300 ≈ 0.7 s, remap ~390 fps CPU, 12-frame stereo episode cold
+~12 s. Gates: 79 tests, golden regression at 1e-6°, mypy clean.
+
 ## Quick start
 
 ```bash
