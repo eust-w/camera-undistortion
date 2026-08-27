@@ -9,3 +9,4 @@ outputs/
 htmlcov/
 .coverage
 .DS_Store
+third_party/tumvi/room1/

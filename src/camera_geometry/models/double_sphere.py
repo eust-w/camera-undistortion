@@ -25,8 +25,8 @@ class DoubleSphere(CameraModel):
         super().__init__(width, height)
         if min(fx, fy) <= 0:
             raise ValueError("fx/fy must be positive")
-        if xi < 0:
-            raise ValueError("xi must be >= 0")
+        # negative xi is legal (official TUM-VI Kalibr calibrations use e.g.
+        # xi = -0.172); the forward model stays well-defined via d2 > 0
         if not (0.0 <= alpha <= 1.0):
             raise ValueError("alpha must be in [0, 1]")
         self.fx = float(fx)

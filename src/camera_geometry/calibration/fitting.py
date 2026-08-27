@@ -82,7 +82,7 @@ def _clip_theta(model_type: str, theta: np.ndarray) -> np.ndarray:
     if model_type == "eucm":
         t[4] = np.clip(t[4], 0.0, 0.98)
     elif model_type == "double_sphere":
-        t[4] = np.clip(t[4], 0.0, 4.0)
+        t[4] = np.clip(t[4], -2.0, 4.0)
         t[5] = np.clip(t[5], 0.0, 1.0)
     elif model_type == "kannala_brandt_4":
         t[4:] = np.clip(t[4:], -1.5, 1.5)
