@@ -10,3 +10,4 @@ htmlcov/
 .coverage
 .DS_Store
 third_party/tumvi/room1/
+third_party/tumvi/
