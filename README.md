@@ -1,219 +1,172 @@
-# Auto Camera Geometry
-
-<p align="center">
-  <b>Pixel ↔ Ray ↔ 3D camera infrastructure for ego fisheye stereo rigs</b>
-</p>
-
-<p align="center">
-  <a href="https://github.com/eust-w/camera-undistortion/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/eust-w/camera-undistortion/ci.yml?branch=main&label=CI&labelColor=333b45&color=2ea44f"></a>
-  <a href="#validation-on-real-data-tum-vi"><img alt="Tests" src="https://img.shields.io/badge/tests-79%20passed-2ea44f?labelColor=333b45"></a>
-  <a href="https://github.com/eust-w/camera-undistortion/actions/workflows/ci.yml"><img alt="mypy" src="https://img.shields.io/badge/mypy-clean-2ea44f?labelColor=333b45"></a>
-  <a href="https://github.com/eust-w/camera-undistortion"><img alt="models" src="https://img.shields.io/badge/models-KB4%C2%B7DS%C2%B7EUCM%C2%B7BC-blue?labelColor=333b45"></a>
-  <img alt="python" src="https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776ab?labelColor=333b45">
-  <a href="LICENSE"><img alt="Code license" src="https://img.shields.io/badge/license-Apache--2.0-orange?labelColor=333b45"></a>
-</p>
-
-<p align="center">
-  <a href="#quick-start">Quick start</a> |
-  <a href="#downstream-adapters">Examples</a> |
-  <a href="#validation-on-real-data-tum-vi">TUM-VI validation</a> |
-  <a href="#service-api">Service API</a> |
-  <a href="scripts/benchmark.py">Benchmarks</a>
-</p>
-
-<p align="center">
-  English |
-  <a href="README.zh-CN.md">简体中文</a>
-</p>
+<div align="center">
+  <img src="docs/readme/hero.svg" alt="Auto Camera Geometry — workflow overview" width="100%">
+  <h1>Auto Camera Geometry</h1>
+  <p><strong>Calibrated pixels → native rays → useful 3D views.</strong></p>
+  <p><a href="https://github.com/eust-w/camera-undistortion/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/eust-w/camera-undistortion/ci.yml?branch=main&amp;style=flat-square&amp;label=CI"></a>
+  <img alt="Python: 3.11+" src="https://img.shields.io/badge/Python-3.11%2B-3776ab?style=flat-square">
+  <img alt="Models: KB4 / DS / EUCM / BC" src="https://img.shields.io/badge/Models-KB4%20%2F%20DS%20%2F%20EUCM%20%2F%20BC-0891b2?style=flat-square">
+  <img alt="Code license: Apache-2.0" src="https://img.shields.io/badge/Code%20license-Apache--2.0-d99536?style=flat-square"></p>
+  <p>
+    <a href="#overview">Overview</a> ·
+    <a href="#quick-start">Quick start</a> ·
+    <a href="#workflow">Workflow</a> ·
+    <a href="#validation">Validation</a> ·
+    <a href="#documentation">Documentation</a>
+  </p>
+  <p><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a></p>
+</div>
 
 ---
 
-This is the end-to-end camera geometry infrastructure for dual-fisheye ego rigs
-(Orbbec-style IR stereo): factory calibration is parsed, validated and health-scored
-automatically; ray maps, virtual pinhole views, rectified stereo pairs and depth
-are derived and cached with **zero human interaction** — no manual model choice,
-no parameter tuning, and a full fallback chain (stereo refinement → AnyCalib →
-quarantine) when the factory data fails QA.
+<a id="overview"></a>
+## One camera model, multiple downstream views
 
-**It is not an "undistortion" tool**: undistortion is only one output of the
-canonical abstraction `pixel ↔ ray ↔ 3D`.
+**Auto Camera Geometry** turns factory calibration into a reusable geometry layer for fisheye and stereo cameras. Parse and check calibration once, then derive native rays, virtual pinhole views, rectified stereo and depth for downstream applications.
 
-## Demo — real TUM-VI frames through the full pipeline
+| Native geometry | Model-friendly images | Explicit quality gates |
+| :--- | :--- | :--- |
+| Pixel ↔ ray projection for SLAM, triangulation and 3D rendering | Virtual pinhole presets for VLM/VLA and 2D vision | Calibration checks, staged recovery and recorded quarantine reasons |
 
-Raw fisheye pair (TUM-VI, official DoubleSphere calibration) → automatic QA →
-virtual pinhole view + rectified stereo pair. All outputs produced by the
-pipeline without any human input.
+### A real-data reference
 
-![demo](docs/demo_tumvi.png)
+![TUM-VI raw fisheye pair and derived camera views](docs/demo_tumvi.png)
 
-## Why
+*Repository demo: TUM-VI fisheye images with Double Sphere calibration. This illustrates the camera pipeline; it is not a downstream SLAM or policy benchmark.*
 
-VLM/VLA pipelines want standard pinhole images; SLAM / 3DGS / depth want native
-rays at full FOV; stereo depth wants rectified pairs. This project serves all
-three from a single canonical representation:
-
-```
-Raw fisheye (never modified)
-      │
-      ├─→ Native rays        pixel_to_ray()  → SLAM / 3DGS / Hand-3D / Object-3D
-      ├─→ Virtual pinhole    90° / 100° / 110° presets → VLM / VLA / 2D detectors
-      └─→ Rectified stereo   horizontal epipolar, Z = f·B/d → depth
-```
-
-## Capability boundaries
-
-Read this before integrating. The rules below are mathematical limits or
-verified experiment results, not missing features.
-
-| | Capability | Boundary |
-|---|---|---|
-| ✅ | Dual-fisheye stereo, factory-calibrated (KB4 / DS) | full pipeline: QA → rays → virtual views → rectified stereo → depth |
-| ✅ | Mono video/image undistortion | requires that camera's factory calibration (a video file alone carries none) |
-| ✅ | Virtual pinhole views | up to **110°** — rectilinear projection beyond ~120° is mathematically impossible (infinite edge stretch) |
-| ✅ | Auto QA + fallback chain | vertical-channel intrinsics (fy / cy / k1) recoverable from fixed-E stereo parity |
-| ⚠️ | Refinement of `fx` / `cx` | **not observable** through horizontal-baseline parity — stays anchored at factory values (needs plumb-line / multi-view additions) |
-| ⚠️ | Common-mode bias on both cameras | indistinguishable from a single-camera error by stereo parity alone — resolved by convention (reference camera frozen), residual possible |
-| ❌ | Mono self-calibration without any calibration | theoretically impossible in our experiments (free depths + free E absorb everything); a `DenseRayProvider` (e.g. AnyCalib network) is required |
-| ❌ | Fisheye → rectilinear at fisheye's native FOV (>150°) | projection-impossible; use stereographic if you must keep full FOV (not yet in scope) |
-| ⚠️ | Fallback precision floor | on synthetic low-texture data parity converges to ~1.5 px, not the 0.5 px PASS gate → QUARANTINE by design; richer real texture expected to do better |
-| ⚠️ | Rolling shutter | model + row-aware API ready, but needs IMU/readout-time metadata from your VIO stack |
-| ❌ | Feature frontend / SLAM backend / GS renderer themselves | this project provides the geometry layer only; examples show the adapter contracts |
-
-Performance envelope (reference machine, M-series Mac): unproject ~8 M pts/s,
-ray map 1600×1300 ≈ 0.7 s, remap ~390 fps CPU, 12-frame stereo episode cold
-~12 s. Gates: 79 tests, golden regression at 1e-6°, mypy clean.
-
+<a id="quick-start"></a>
 ## Quick start
+
+Requires **Python 3.11+**. Start with the bundled example calibration; it does not require downloading a dataset.
 
 ```bash
 git clone https://github.com/eust-w/camera-undistortion.git
 cd camera-undistortion
-python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-pytest          # 79 tests: unit / property / integration / golden / examples
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+
+camera-geometry inspect-camera --config configs/device_orbbec_example.yaml
+camera-geometry validate-calibration --config configs/device_orbbec_example.yaml
 ```
 
-Undistort a video with a known factory calibration:
+The example contains placeholder right-camera intrinsics. It demonstrates the schema and CLI, not a verified calibration for your device.
+
+For a stereo episode, provide its own calibration and an input directory matching the [pipeline](src/camera_geometry/pipeline.py) layout:
 
 ```bash
-python scripts/undistort_video.py input.mp4 --preset ego_100 --size 1024
+camera-geometry process-dataset \
+  --input /path/to/episode --output /path/to/output \
+  --config /path/to/device.yaml
 ```
 
-Run the full automatic episode DAG on a stereo image folder:
-
-```bash
-python -m camera_geometry process-dataset --input episode/ --output episode/ --config device.yaml
-camera-geometry validate-calibration --config device.yaml     # QA + health score
-camera-geometry inspect-camera       --config device.yaml     # parsed canonical view
-```
-
-Python API:
+### Python API
 
 ```python
+import numpy as np
 from camera_geometry.calibration.parser import load_device_calibration
 from camera_geometry.models.factory import build_camera
 
-cam = build_camera(load_device_calibration("device.yaml").camera("IR_L"))
-rays = cam.pixel_to_ray(pixels)   # [...,2] -> [...,3] unit bearings (full FOV)
-px   = cam.ray_to_pixel(rays)     # back-projection
-mask = cam.valid_mask()           # numerically valid region
+calibration = load_device_calibration("configs/device_orbbec_example.yaml")
+camera = build_camera(calibration.camera("IR_L"))
+pixels = np.array([[800.0, 650.0]])
+rays = camera.pixel_to_ray(pixels)
+reprojected = camera.ray_to_pixel(rays)
 ```
 
-## Validation on real data (TUM-VI)
+<a id="workflow"></a>
+## From calibration to deliverables
 
-Validated end-to-end on the public [TUM VI Benchmark](https://cvg.cit.tum.de/data/datasets/visual-inertial-dataset)
-(RealSense-style global-shutter fisheye stereo) with the official basalt
-DoubleSphere calibration:
+```text
+Factory calibration
+       │
+       ▼
+Schema · rotation · baseline · projection checks
+       │
+       ├── accepted ──► cached geometry ──► rays / views / stereo / depth
+       │
+       └── recovery ──► stereo refinement → optional COLMAP / dense-ray fitting
+                              │
+                              └── unresolved ──► quarantine + reason
+```
 
-| Check | Result |
-|---|---|
-| Projection round-trip (DS model) | machine precision |
-| Automatic QA + health score | PASS (schema / rotation / baseline / round-trip) |
-| Fallback chain | triggered on injected corruption & recovered automatically |
-| Selective dataset fetch | 1.4 GB archive → ~16 MB transferred via range-request tar streaming |
+| Camera model | Implementation |
+| :--- | :--- |
+| Kannala–Brandt 4 | [KB4 model](src/camera_geometry/models/kb4.py) |
+| Double Sphere | [DS model](src/camera_geometry/models/double_sphere.py), including negative `xi` |
+| Extended Unified Camera Model | [EUCM model](src/camera_geometry/models/eucm.py) |
+| Brown–Conrady | [Brown model](src/camera_geometry/models/brown.py) |
+| Pinhole | [Virtual/rectified camera model](src/camera_geometry/models/pinhole.py) |
 
-Reproduce:
+### Connect a downstream application
+
+```bash
+python examples/slam_adapter.py
+python examples/render_for_3dgs.py
+python examples/handpose_3d.py
+```
+
+These examples demonstrate geometry contracts. They do not bundle a SLAM backend, Gaussian renderer or hand-pose model.
+
+<details>
+<summary><strong>Run the optional HTTP service</strong></summary>
+
+```bash
+python -m pip install -e '.[server]'
+uvicorn camera_geometry.service:app --host 127.0.0.1 --port 8300
+```
+
+The [service](src/camera_geometry/service.py) exposes calibration resolution, ray maps, virtual cameras, stereo rectification, jobs, `/healthz` and `/metrics`.
+
+</details>
+
+<details>
+<summary><strong>Reproduce the TUM-VI input preparation</strong></summary>
 
 ```bash
 python scripts/fetch_tumvi_subset.py \
-    --url https://cdn2.vision.in.tum.de/tumvi/exported/euroc/512_16/dataset-room1_512_16.tar \
-    --out third_party/tumvi/room1 --per-cam 40
+  --url https://cdn2.vision.in.tum.de/tumvi/exported/euroc/512_16/dataset-room1_512_16.tar \
+  --out third_party/tumvi/room1 --per-cam 40
 python scripts/import_tumvi.py --root third_party/tumvi/room1 \
-    --calib third_party/tumvi/tumvi_512_ds_calib.json --out outputs/tumvi_episode
-python -m camera_geometry process-dataset --input outputs/tumvi_episode \
-    --output outputs/tumvi_episode --config outputs/tumvi_episode/device.yaml
+  --calib /path/to/tumvi_512_ds_calib.json --out outputs/tumvi_episode
+camera-geometry process-dataset --input outputs/tumvi_episode \
+  --output outputs/tumvi_processed --config outputs/tumvi_episode/device.yaml
 ```
 
-## Camera models
+Supply the matching TUM-VI Double Sphere calibration JSON separately. The image-fetch command is not a calibration downloader. See the [import script](scripts/import_tumvi.py).
 
-| Model | Status | Notes |
-|---|---|---|
-| Kannala-Brandt 4 | ✅ | theta-LUT Newton unprojection, ~8 M pts/s, machine-precision round-trip |
-| Double Sphere | ✅ | closed-form unprojection incl. negative xi (official TUM-VI calib) |
-| EUCM | ✅ | alpha ∈ [0,1), pinhole at 0 |
-| Brown-Conrady | ✅ | plumb_bob, normal lenses |
-| Pinhole | ✅ | virtual views / rectified cameras |
+</details>
 
-## Automatic calibration pipeline
-
-```
-factory calibration
-        │ QA: schema · RᵀR≈I · baseline range · round-trip P99 · stereo parity
-      PASS ────────────────► cache LUTs ► rays/views/stereo/depth
-        │ FAIL
-        ▼
-Stage 1  stereo refinement (FIXED factory essential matrix, signed-sampson,
-         robust coordinate descent + LM; identifiable-subset only;
-         reference camera frozen — see identifiability notes in code)
-        ▼ FAIL
-Stage 1.5 external COLMAP SfM hook (optional binary)
-        ▼ FAIL
-Stage 2  AnyCalib-style fitting: dense-ray provider → per-frame robust fits,
-         median consensus, model selection (KB4/EUCM/DS/pinhole)
-        ▼ FAIL
-QUARANTINE (reason + stage recorded; re-runnable, never silent)
-```
-
-Key identifiability findings encoded in the design (verified experimentally):
-mono 2-view reprojection with free depths cannot identify intrinsics; a free
-essential matrix absorbs smooth distortion; fixed-E stereo parity only sees the
-vertical channel on horizontal baselines — so `fx/cx` stay anchored and the
-reference camera is frozen by convention.
-
-## Downstream adapters
+<a id="validation"></a>
+## Validation and operating boundaries
 
 ```bash
-python examples/slam_adapter.py     # raw feature pixels -> bearings -> triangulation
-python examples/render_for_3dgs.py  # gaussians -> RAW fisheye pixels + ray map
-python examples/handpose_3d.py      # virtual-view detections -> 3D keypoints
+python -m pytest
+python -m mypy src/camera_geometry
+python scripts/benchmark.py --help
 ```
 
-## Service API
+CI configuration and tests are linked directly rather than represented by a fixed “passed” count.
 
-```bash
-uvicorn camera_geometry.service:app --port 8300
-# POST /camera/resolve | validate | ray-map | virtual-camera
-# POST /camera/stereo-rectify | stereo-rectify-upload | reprocess (+ GET /jobs/{id})
-# GET  /camera/{calibration_id} | /metrics (Prometheus) | /healthz
-```
+| Area | Current boundary |
+| :--- | :--- |
+| Input calibration | A video alone is not sufficient. Use calibration belonging to that camera. |
+| Virtual views | Built-in presets target 90° / 100° / 110°; wider rectilinear views amplify edge stretching. |
+| Stereo refinement | Horizontal-baseline parity does not identify every parameter; `fx/cx` stay anchored and the reference camera is held fixed. |
+| Dense-ray fallback | Requires a compatible provider; pretrained AnyCalib weights are not bundled. |
+| Rolling shutter | Row-aware interfaces need external readout-time and motion metadata. |
+| Video helper | `scripts/undistort_video.py` embeds a particular factory profile; do not apply it unchanged to an unrelated camera. |
 
-Every calibration-bearing response carries `calibration_id`, `camera_model`,
-`quality_status`, `artifact_uri`. `GET /metrics` exposes spec-section-43
-metrics in Prometheus format.
+<a id="documentation"></a>
+## Explore the repository
 
-## Storage, Docker, CI
-
-* LUT cache on local FS or any S3-compatible bucket (`CAMERA_GEOMETRY_LUT_BACKEND=s3`)
-* Timestamps as parquet (pyarrow) with CSV fallback
-* `docker build -t camera-geometry . && docker run -p 8300:8300 camera-geometry`
-* CI runs ruff + mypy (clean over 48 files) + pytest on Python 3.11/3.12
-
-## Roadmap (external inputs needed)
-
-* Phase-0 vendor golden for Orbbec (`orbbec_pixel_to_ray()` slot in `scripts/export_golden.py`)
-* Real-scene validation of the 0.5 px stereo gate after refinement
-* Rolling-shutter closure needs IMU/readout metadata (model + row-aware API ready)
-* AnyCalib network weights behind the existing `DenseRayProvider` interface
+| Start here | What you will find |
+| :--- | :--- |
+| [Example calibration](configs/device_orbbec_example.yaml) | Device, camera, intrinsics and extrinsics layout |
+| [Pipeline](src/camera_geometry/pipeline.py) | Episode processing and output orchestration |
+| [Calibration recovery](src/camera_geometry/fallback/) | Optional recovery stages and integration hooks |
+| [Tests](tests/) | Geometry, calibration, pipeline and regression coverage |
+| [CI](.github/workflows/ci.yml) | Automated repository checks |
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Code is licensed under [Apache-2.0](LICENSE). External datasets, calibration files and model assets retain their own terms.
